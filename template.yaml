@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Discord `/clear-ch-message` slash command handler.
+  API Gateway (HTTP API) + single Lambda function (Python), no always-on server.
+  The same Lambda function is invoked synchronously for the Discord Interaction
+  webhook and asynchronously (self-invoke) as a background worker that purges
+  channel messages, since Discord requires a response within 3 seconds.
+
+Parameters:
+  DiscordBotToken:
+    Type: String
+    NoEcho: true
+    Description: >
+      Discord Bot Token used to call the Discord REST API (Authorization: Bot <token>).
+      Treated as sensitive; not stored in this template.
+  DiscordPublicKey:
+    Type: String
+    NoEcho: true
+    Description: >
+      Discord Application Public Key, used to verify Ed25519 request signatures.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 900
+    MemorySize: 256
+    Architectures:
+      - x86_64
+
+Resources:
+  DiscordHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+
+  ClearChMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-clear-ch-message"
+      Description: Handles the Discord /clear-ch-message interaction and purges channel messages.
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          DISCORD_BOT_TOKEN: !Ref DiscordBotToken
+          DISCORD_PUBLIC_KEY: !Ref DiscordPublicKey
+      Policies:
+        - Statement:
+            - Sid: InvokeSelfAsWorker
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              # Constructed explicitly (not via !GetAtt on this function) to avoid a
+              # circular dependency between this function and its own IAM policy.
+              Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-clear-ch-message"
+      Events:
+        DiscordInteractions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiscordHttpApi
+            Path: /discord/interactions
+            Method: post
+
+Outputs:
+  DiscordInteractionsEndpoint:
+    Description: >
+      Set this URL as the "Interactions Endpoint URL" in the Discord Developer Portal.
+    Value: !Sub "https://${DiscordHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/discord/interactions"
+  ClearChMessageFunctionName:
+    Description: Lambda function name (also used for CloudWatch Logs lookup).
+    Value: !Ref ClearChMessageFunction

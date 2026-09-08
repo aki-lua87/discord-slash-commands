@@ -1,0 +1,21 @@
+# Copy this file to samconfig.toml and fill in real values.
+# samconfig.toml is gitignored — never commit it with real secrets.
+#
+#   cp samconfig.toml.example samconfig.toml
+#
+# Alternatively, skip this file entirely and run `sam deploy --guided`,
+# which will prompt for these values and create samconfig.toml for you.
+
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "discord-clear-ch-message"
+region = "ap-northeast-1"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+parameter_overrides = "DiscordBotToken=\"REPLACE_WITH_BOT_TOKEN\" DiscordPublicKey=\"REPLACE_WITH_PUBLIC_KEY\""

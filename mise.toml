@@ -1,0 +1,18 @@
+[tools]
+python = "3.12"
+
+[tasks.validate]
+description = "Validate the SAM template"
+run = "sam validate --lint"
+
+[tasks.build]
+description = "Build the Lambda deployment package"
+run = "sam build"
+
+[tasks."deploy:guided"]
+description = "Build then deploy with guided prompts (first deploy / parameter changes)"
+run = ["sam build", "sam deploy --guided"]
+
+[tasks.deploy]
+description = "Build then deploy using the saved samconfig.toml"
+run = ["sam build", "sam deploy"]
