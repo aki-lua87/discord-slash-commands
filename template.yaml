@@ -19,6 +19,14 @@ Parameters:
     NoEcho: true
     Description: >
       Discord Application Public Key, used to verify Ed25519 request signatures.
+  AllowedChannelIds:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated list of Discord channel IDs where /clear-ch-message is allowed
+      to run. Leave empty to allow it in any channel (still subject to the Manage
+      Messages permission check). Not secret, but set via samconfig.toml rather than
+      hardcoded here so the template stays generic/shareable.
 
 Globals:
   Function:
@@ -45,6 +53,7 @@ Resources:
         Variables:
           DISCORD_BOT_TOKEN: !Ref DiscordBotToken
           DISCORD_PUBLIC_KEY: !Ref DiscordPublicKey
+          ALLOWED_CHANNEL_IDS: !Ref AllowedChannelIds
       Policies:
         - Statement:
             - Sid: InvokeSelfAsWorker

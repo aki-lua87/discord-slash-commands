@@ -18,4 +18,8 @@ region = "ap-northeast-1"
 resolve_s3 = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
-parameter_overrides = "DiscordBotToken=\"REPLACE_WITH_BOT_TOKEN\" DiscordPublicKey=\"REPLACE_WITH_PUBLIC_KEY\""
+# AllowedChannelIds isn't secret, but is kept out of template.yaml (which may be
+# shared/public) and set here instead, in the gitignored samconfig.toml.
+# NOTE: this .example file itself IS tracked in git, so keep placeholders here -
+# put your real channel IDs only in your local samconfig.toml (gitignored).
+parameter_overrides = "DiscordBotToken=\"REPLACE_WITH_BOT_TOKEN\" DiscordPublicKey=\"REPLACE_WITH_PUBLIC_KEY\" AllowedChannelIds=\"REPLACE_WITH_CHANNEL_ID_1,REPLACE_WITH_CHANNEL_ID_2\""

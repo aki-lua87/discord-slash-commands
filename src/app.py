@@ -2,10 +2,11 @@
 
 Single Lambda function used two ways:
   * Synchronously by API Gateway to handle the Discord Interaction webhook
-    (signature verification, permission check, deferred response).
+    (signature verification, channel/permission checks, deferred response).
   * Asynchronously (self-invoked, InvocationType=Event) as a background
-    worker that actually purges channel messages and then patches the
-    original interaction response with the result.
+    worker that actually purges channel messages, then posts the result as a
+    public followup message (on success) or patches the ephemeral deferred
+    response with an error (on failure).
 """
 
 import base64
@@ -36,6 +37,8 @@ PERMISSION_MANAGE_MESSAGES = 0x2000
 
 WORKER_FLAG_KEY = "invocation_source"
 WORKER_FLAG_VALUE = "async_worker"
+
+ALLOWED_CHANNEL_IDS_ENV_VAR = "ALLOWED_CHANNEL_IDS"
 
 INTERACTION_TYPE_PING = 1
 INTERACTION_TYPE_APPLICATION_COMMAND = 2
@@ -102,6 +105,16 @@ def _handle_application_command(interaction, context):
             "data": {"content": "未対応のコマンドだよ。", "flags": EPHEMERAL_FLAG},
         })
 
+    if not _is_channel_allowed(channel_id):
+        logger.info("channel not allowed channel_id=%s", channel_id)
+        return _build_response(200, {
+            "type": INTERACTION_RESPONSE_TYPE_CHANNEL_MESSAGE_WITH_SOURCE,
+            "data": {
+                "content": "このチャンネルでは `/clear-ch-message` を実行できないよ。",
+                "flags": EPHEMERAL_FLAG,
+            },
+        })
+
     if not _has_manage_messages_permission(member):
         user_id = ((member or {}).get("user") or {}).get("id")
         logger.info("permission denied channel_id=%s user_id=%s", channel_id, user_id)
@@ -127,6 +140,19 @@ def _handle_application_command(interaction, context):
         "type": INTERACTION_RESPONSE_TYPE_DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         "data": {"flags": EPHEMERAL_FLAG},
     })
+
+
+def _is_channel_allowed(channel_id):
+    allowed_ids = _get_allowed_channel_ids()
+    if not allowed_ids:
+        # Allow-list not configured => no restriction beyond the permission check.
+        return True
+    return channel_id in allowed_ids
+
+
+def _get_allowed_channel_ids():
+    raw = os.environ.get(ALLOWED_CHANNEL_IDS_ENV_VAR, "")
+    return {channel_id.strip() for channel_id in raw.split(",") if channel_id.strip()}
 
 
 def _has_manage_messages_permission(member):
@@ -186,21 +212,40 @@ def handle_worker(event):
 
     logger.info("worker start channel_id=%s", channel_id)
 
-    content = "メッセージの削除中にエラーが発生したよ。"
+    bot_token = None
+    deleted_count = None
     try:
         bot_token = os.environ["DISCORD_BOT_TOKEN"]
         deleted_count = _purge_channel_messages(channel_id, bot_token)
         logger.info("worker deleted messages channel_id=%s deleted_count=%s", channel_id, deleted_count)
-        content = f"{deleted_count}件のメッセージを削除したよ。"
     except Exception:
         logger.exception("worker failed to purge channel_id=%s", channel_id)
 
     # Always attempt to notify Discord, even if something above raised unexpectedly,
-    # so the deferred "thinking..." state never gets stuck forever.
-    try:
-        _patch_original_response(application_id, interaction_token, content)
-    except Exception:
-        logger.exception("worker failed to patch original response channel_id=%s", channel_id)
+    # so the deferred "thinking..." state never gets stuck forever. Each Discord call
+    # below is independent, so one failing must not skip the others.
+    if deleted_count is None:
+        # Error case: only the invoking user needs to know: close out the
+        # ephemeral deferred placeholder with the error, nothing public.
+        try:
+            _patch_original_response(application_id, interaction_token, "メッセージの削除中にエラーが発生したよ。")
+        except Exception:
+            logger.exception("worker failed to patch original response channel_id=%s", channel_id)
+    else:
+        # Success case: the result should be visible to everyone. A webhook
+        # followup message can't be used for this - once the initial response is
+        # deferred as ephemeral, Discord forces every followup for that same
+        # interaction to stay ephemeral too, with no way to override it. So this
+        # posts a normal bot message instead (independent of the interaction's
+        # ephemeral state), sent after the purge so it's the only message left.
+        try:
+            _post_channel_message(channel_id, bot_token, f"{deleted_count}件のメッセージを削除したよ。")
+        except Exception:
+            logger.exception("worker failed to post result message channel_id=%s", channel_id)
+        try:
+            _patch_original_response(application_id, interaction_token, "削除が完了したよ。")
+        except Exception:
+            logger.exception("worker failed to patch original response channel_id=%s", channel_id)
 
     logger.info("worker end channel_id=%s", channel_id)
     return {"ok": True}
@@ -352,3 +397,13 @@ def _patch_original_response(application_id, interaction_token, content):
     status, body = _discord_api_request("PATCH", path, body={"content": content})
     if status != 200:
         logger.error("failed to patch original interaction response status=%s body=%s", status, body)
+
+
+def _post_channel_message(channel_id, bot_token, content):
+    # A plain bot message via the Bot Token, independent of the interaction's
+    # ephemeral state - unlike a webhook followup, this is always visible to
+    # everyone in the channel. Requires the bot to have Send Messages permission.
+    path = f"/channels/{channel_id}/messages"
+    status, body = _discord_api_request("POST", path, bot_token=bot_token, body={"content": content})
+    if status not in (200, 201):
+        logger.error("failed to post result message channel_id=%s status=%s body=%s", channel_id, status, body)
