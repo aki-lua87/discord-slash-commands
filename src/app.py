@@ -244,7 +244,7 @@ def handle_worker(event):
         # posts a normal bot message instead (independent of the interaction's
         # ephemeral state), sent after the purge so it's the only message left.
         try:
-            _post_channel_message(channel_id, bot_token, f"あなたの投稿を{deleted_count}件削除したよ。")
+            _post_channel_message(channel_id, bot_token, f"<@{target_user_id}> の投稿を{deleted_count}件削除したよ。")
         except Exception:
             logger.exception("worker failed to post result message channel_id=%s", channel_id)
         try:
@@ -414,7 +414,12 @@ def _post_channel_message(channel_id, bot_token, content):
     # A plain bot message via the Bot Token, independent of the interaction's
     # ephemeral state - unlike a webhook followup, this is always visible to
     # everyone in the channel. Requires the bot to have Send Messages permission.
+    # allowed_mentions.parse=[] renders any <@user_id> in content as a name tag
+    # without actually pinging/notifying them.
     path = f"/channels/{channel_id}/messages"
-    status, body = _discord_api_request("POST", path, bot_token=bot_token, body={"content": content})
+    request_body = {"content": content, "allowed_mentions": {"parse": []}}
+    status, response_body = _discord_api_request("POST", path, bot_token=bot_token, body=request_body)
     if status not in (200, 201):
-        logger.error("failed to post result message channel_id=%s status=%s body=%s", channel_id, status, body)
+        logger.error(
+            "failed to post result message channel_id=%s status=%s body=%s", channel_id, status, response_body
+        )
