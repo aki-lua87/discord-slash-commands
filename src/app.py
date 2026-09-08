@@ -183,19 +183,25 @@ def handle_worker(event):
     channel_id = event.get("channel_id")
     application_id = event.get("application_id")
     interaction_token = event.get("interaction_token")
-    bot_token = os.environ["DISCORD_BOT_TOKEN"]
 
     logger.info("worker start channel_id=%s", channel_id)
 
+    content = "メッセージの削除中にエラーが発生したよ。"
     try:
+        bot_token = os.environ["DISCORD_BOT_TOKEN"]
         deleted_count = _purge_channel_messages(channel_id, bot_token)
         logger.info("worker deleted messages channel_id=%s deleted_count=%s", channel_id, deleted_count)
         content = f"{deleted_count}件のメッセージを削除したよ。"
     except Exception:
         logger.exception("worker failed to purge channel_id=%s", channel_id)
-        content = "メッセージの削除中にエラーが発生したよ。"
 
-    _patch_original_response(application_id, interaction_token, content)
+    # Always attempt to notify Discord, even if something above raised unexpectedly,
+    # so the deferred "thinking..." state never gets stuck forever.
+    try:
+        _patch_original_response(application_id, interaction_token, content)
+    except Exception:
+        logger.exception("worker failed to patch original response channel_id=%s", channel_id)
+
     logger.info("worker end channel_id=%s", channel_id)
     return {"ok": True}
 
@@ -263,7 +269,13 @@ def _is_within_bulk_delete_window(message_id, now_ms):
 def _discord_api_request(method, path, bot_token=None, body=None, max_retries=5):
     url = f"{DISCORD_API_BASE}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        # Discord's edge (Cloudflare) blocks requests with generic HTTP client
+        # User-Agents (e.g. urllib's default) with an opaque 403 - a descriptive
+        # UA per Discord's API docs is required, not just a nice-to-have.
+        "User-Agent": "DiscordBot (https://github.com/aki-lua87/discord-slash-commands, 1.0)",
+    }
     if bot_token:
         headers["Authorization"] = f"Bot {bot_token}"
 
