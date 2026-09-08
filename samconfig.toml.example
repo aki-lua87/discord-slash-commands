@@ -1,0 +1,25 @@
+# Copy this file to samconfig.toml and fill in real values.
+# samconfig.toml is gitignored — never commit it with real secrets.
+#
+#   cp samconfig.toml.example samconfig.toml
+#
+# Alternatively, skip this file entirely and run `sam deploy --guided`,
+# which will prompt for these values and create samconfig.toml for you.
+
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "discord-clear-ch-message"
+region = "ap-northeast-1"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+# AllowedChannelIds isn't secret, but is kept out of template.yaml (which may be
+# shared/public) and set here instead, in the gitignored samconfig.toml.
+# NOTE: this .example file itself IS tracked in git, so keep placeholders here -
+# put your real channel IDs only in your local samconfig.toml (gitignored).
+parameter_overrides = "DiscordBotToken=\"REPLACE_WITH_BOT_TOKEN\" DiscordPublicKey=\"REPLACE_WITH_PUBLIC_KEY\" AllowedChannelIds=\"REPLACE_WITH_CHANNEL_ID_1,REPLACE_WITH_CHANNEL_ID_2\""
