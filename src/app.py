@@ -1,11 +1,13 @@
 """Discord `/clear-ch-message` slash command handler.
 
+Deletes only the invoking user's own messages in the channel (not everyone's).
+
 Single Lambda function used two ways:
   * Synchronously by API Gateway to handle the Discord Interaction webhook
     (signature verification, channel/permission checks, deferred response).
   * Asynchronously (self-invoked, InvocationType=Event) as a background
-    worker that actually purges channel messages, then posts the result as a
-    public followup message (on success) or patches the ephemeral deferred
+    worker that purges the invoking user's messages, then posts the result as
+    a normal bot message (on success) or patches the ephemeral deferred
     response with an error (on failure).
 """
 
@@ -128,12 +130,14 @@ def _handle_application_command(interaction, context):
 
     application_id = interaction.get("application_id")
     interaction_token = interaction.get("token")
+    invoking_user_id = ((member or {}).get("user") or {}).get("id")
 
     _invoke_worker_async(context, {
         WORKER_FLAG_KEY: WORKER_FLAG_VALUE,
         "channel_id": channel_id,
         "application_id": application_id,
         "interaction_token": interaction_token,
+        "target_user_id": invoking_user_id,
     })
 
     return _build_response(200, {
@@ -209,14 +213,15 @@ def handle_worker(event):
     channel_id = event.get("channel_id")
     application_id = event.get("application_id")
     interaction_token = event.get("interaction_token")
+    target_user_id = event.get("target_user_id")
 
-    logger.info("worker start channel_id=%s", channel_id)
+    logger.info("worker start channel_id=%s target_user_id=%s", channel_id, target_user_id)
 
     bot_token = None
     deleted_count = None
     try:
         bot_token = os.environ["DISCORD_BOT_TOKEN"]
-        deleted_count = _purge_channel_messages(channel_id, bot_token)
+        deleted_count = _purge_channel_messages(channel_id, bot_token, target_user_id)
         logger.info("worker deleted messages channel_id=%s deleted_count=%s", channel_id, deleted_count)
     except Exception:
         logger.exception("worker failed to purge channel_id=%s", channel_id)
@@ -239,7 +244,7 @@ def handle_worker(event):
         # posts a normal bot message instead (independent of the interaction's
         # ephemeral state), sent after the purge so it's the only message left.
         try:
-            _post_channel_message(channel_id, bot_token, f"{deleted_count}件のメッセージを削除したよ。")
+            _post_channel_message(channel_id, bot_token, f"あなたの投稿を{deleted_count}件削除したよ。")
         except Exception:
             logger.exception("worker failed to post result message channel_id=%s", channel_id)
         try:
@@ -251,7 +256,7 @@ def handle_worker(event):
     return {"ok": True}
 
 
-def _purge_channel_messages(channel_id, bot_token):
+def _purge_channel_messages(channel_id, bot_token, target_user_id):
     deleted_total = 0
     before = None
 
@@ -260,12 +265,18 @@ def _purge_channel_messages(channel_id, bot_token):
         if not messages:
             break
 
-        message_ids = [message["id"] for message in messages]
-        before = message_ids[-1]  # oldest message in this page; keep paging further back
+        # Page through the whole channel history regardless of author (Discord's
+        # `before` cursor needs the oldest ID seen so far), but only ever delete
+        # messages authored by the command's invoker.
+        before = messages[-1]["id"]
+        own_message_ids = [
+            message["id"] for message in messages
+            if (message.get("author") or {}).get("id") == target_user_id
+        ]
 
         now_ms = _current_epoch_ms()
-        recent_ids = [mid for mid in message_ids if _is_within_bulk_delete_window(mid, now_ms)]
-        old_ids = [mid for mid in message_ids if mid not in recent_ids]
+        recent_ids = [mid for mid in own_message_ids if _is_within_bulk_delete_window(mid, now_ms)]
+        old_ids = [mid for mid in own_message_ids if mid not in recent_ids]
 
         deleted_total += _delete_recent_batch(channel_id, bot_token, recent_ids)
         deleted_total += _delete_old_messages_individually(channel_id, bot_token, old_ids)
